@@ -7,24 +7,33 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Card } from "@/components/ui/card"
 import { Progress } from "@/components/ui/progress"
-import { X, Check, ArrowRight, Sparkles, AlertCircle } from "lucide-react"
+import { X, Check, ArrowRight, Sparkles, AlertCircle, Plus } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+
+interface WordDetail {
+  word: string
+  translation: string
+  pronunciation?: string
+}
 
 interface Exercise {
   id: string
   type:
-    | "turkish-to-native"
-    | "native-to-turkish"
-    | "turkish-to-english"
-    | "english-to-turkish"
-    | "fill-in-blank"
+    | "translate-to-native"
+    | "translate-to-turkish"
+    | "word-bank"
+    | "sentence-arrange"
     | "multiple-choice"
-    | "sentence-building"
+    | "fill-blank"
   question: string
   answer: string
   hint?: string
   options?: string[]
   context?: string
+  wordBank?: string[]
+  correctOrder?: string[]
+  wordDetails?: WordDetail[]
 }
 
 type FeedbackState = {
@@ -35,11 +44,12 @@ type FeedbackState = {
 
 export function LessonFlowScreen() {
   const router = useRouter()
-  const { vocabulary, setLessonResult, refreshData } = useApp()
+  const { vocabulary, addVocabulary, setLessonResult, refreshData } = useApp()
   const [exercises, setExercises] = useState<Exercise[]>([])
   const [currentIndex, setCurrentIndex] = useState(0)
   const [userAnswer, setUserAnswer] = useState("")
   const [selectedOption, setSelectedOption] = useState<string | null>(null)
+  const [selectedWords, setSelectedWords] = useState<string[]>([])
   const [feedback, setFeedback] = useState<FeedbackState>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -47,9 +57,15 @@ export function LessonFlowScreen() {
   const [vocabularyUpdates, setVocabularyUpdates] = useState<{ turkish: string; isCorrect: boolean }[]>([])
   const [nativeLanguage, setNativeLanguage] = useState("English")
 
+  const [wordDetailDialog, setWordDetailDialog] = useState<{
+    open: boolean
+    word: string
+    translation: string
+    pronunciation?: string
+  } | null>(null)
+
   useEffect(() => {
     generateExercises()
-    // Fetch user's native language setting
     fetch("/api/user/settings")
       .then((res) => res.json())
       .then((data) => {
@@ -99,18 +115,57 @@ export function LessonFlowScreen() {
   const currentExercise = exercises[currentIndex]
   const progress = exercises.length > 0 ? (currentIndex / exercises.length) * 100 : 0
 
+  const handleWordClick = (word: string) => {
+    if (!currentExercise?.wordDetails) return
+
+    const detail = currentExercise.wordDetails.find((w) => w.word === word)
+    if (detail) {
+      setWordDetailDialog({
+        open: true,
+        word: detail.word,
+        translation: detail.translation,
+        pronunciation: detail.pronunciation,
+      })
+    }
+  }
+
+  const handleWordSelect = (word: string) => {
+    if (feedback) return
+
+    if (selectedWords.includes(word)) {
+      setSelectedWords(selectedWords.filter((w) => w !== word))
+    } else {
+      setSelectedWords([...selectedWords, word])
+    }
+  }
+
+  const handleRemoveWord = (index: number) => {
+    if (feedback) return
+    setSelectedWords(selectedWords.filter((_, i) => i !== index))
+  }
+
   const checkAnswer = () => {
     if (!currentExercise) return
 
-    const userInput = currentExercise.type === "multiple-choice" ? selectedOption : userAnswer.trim()
+    let userInput = ""
+    let isCorrect = false
+
+    if (currentExercise.type === "multiple-choice") {
+      userInput = selectedOption || ""
+    } else if (currentExercise.type === "word-bank" || currentExercise.type === "sentence-arrange") {
+      userInput = selectedWords.join(" ")
+    } else {
+      userInput = userAnswer.trim()
+    }
+
     if (!userInput) return
 
     const normalizedUser = userInput.toLowerCase().trim()
     const normalizedAnswer = currentExercise.answer.toLowerCase().trim()
 
     const isExactMatch = normalizedUser === normalizedAnswer
-    const isCloseMatch = calculateSimilarity(normalizedUser, normalizedAnswer) > 0.8
-    const isCorrect = isExactMatch || isCloseMatch
+    const isCloseMatch = calculateSimilarity(normalizedUser, normalizedAnswer) > 0.85
+    isCorrect = isExactMatch || isCloseMatch
 
     let message = ""
     if (isExactMatch) {
@@ -139,7 +194,6 @@ export function LessonFlowScreen() {
       },
     ])
 
-    // Track vocabulary update for mastery
     const vocabWord = vocabulary.find(
       (v) =>
         v.turkish.toLowerCase() === currentExercise.question.toLowerCase() ||
@@ -155,12 +209,19 @@ export function LessonFlowScreen() {
       setCurrentIndex((prev) => prev + 1)
       setUserAnswer("")
       setSelectedOption(null)
+      setSelectedWords([])
       setFeedback(null)
     } else {
-      // Lesson complete - save results
       const totalCorrect = results.filter((r) => r.isCorrect).length + (feedback?.isCorrect ? 1 : 0)
 
       try {
+        const userInput =
+          currentExercise?.type === "multiple-choice"
+            ? selectedOption
+            : currentExercise?.type === "word-bank" || currentExercise?.type === "sentence-arrange"
+              ? selectedWords.join(" ")
+              : userAnswer
+
         const response = await fetch("/api/lesson/complete", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -171,7 +232,7 @@ export function LessonFlowScreen() {
               ...results,
               feedback && {
                 question: currentExercise?.question,
-                userAnswer: currentExercise?.type === "multiple-choice" ? selectedOption : userAnswer,
+                userAnswer: userInput,
                 correctAnswer: currentExercise?.answer,
                 isCorrect: feedback.isCorrect,
                 feedback: feedback.message,
@@ -192,7 +253,7 @@ export function LessonFlowScreen() {
             ...results,
             {
               question: currentExercise?.question || "",
-              userAnswer: currentExercise?.type === "multiple-choice" ? selectedOption || "" : userAnswer,
+              userAnswer: userInput || "",
               correctAnswer: currentExercise?.answer || "",
               isCorrect: feedback?.isCorrect || false,
               feedback: feedback?.message || "",
@@ -241,13 +302,13 @@ export function LessonFlowScreen() {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center px-6">
-        <div className="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center mb-4">
-          <Sparkles className="w-8 h-8 text-primary animate-pulse" />
+      <div className="min-h-screen flex flex-col items-center justify-center px-6 bg-background">
+        <div className="w-20 h-20 rounded-full bg-primary/10 flex items-center justify-center mb-6">
+          <Sparkles className="w-10 h-10 text-primary animate-pulse" />
         </div>
-        <p className="text-lg font-medium text-foreground mb-2">Creating your lesson...</p>
-        <p className="text-sm text-muted-foreground text-center">
-          Our AI is crafting personalized exercises based on your vocabulary and goals
+        <p className="text-xl font-semibold text-foreground mb-2">Creating your lesson...</p>
+        <p className="text-sm text-muted-foreground text-center max-w-xs">
+          AI is crafting personalized exercises based on your vocabulary and level
         </p>
       </div>
     )
@@ -255,17 +316,17 @@ export function LessonFlowScreen() {
 
   if (error) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center px-6 text-center">
-        <div className="w-16 h-16 rounded-full bg-destructive/10 flex items-center justify-center mb-4">
-          <AlertCircle className="w-8 h-8 text-destructive" />
+      <div className="min-h-screen flex flex-col items-center justify-center px-6 text-center bg-background">
+        <div className="w-20 h-20 rounded-full bg-destructive/10 flex items-center justify-center mb-6">
+          <AlertCircle className="w-10 h-10 text-destructive" />
         </div>
-        <p className="text-lg font-medium text-foreground mb-2">Oops!</p>
-        <p className="text-muted-foreground mb-6">{error}</p>
+        <p className="text-xl font-semibold text-foreground mb-2">Oops!</p>
+        <p className="text-muted-foreground mb-6 max-w-xs">{error}</p>
         <div className="space-y-3 w-full max-w-xs">
-          <Button onClick={generateExercises} className="w-full">
+          <Button onClick={generateExercises} className="w-full h-12">
             Try Again
           </Button>
-          <Button variant="outline" onClick={() => router.push("/")} className="w-full">
+          <Button variant="outline" onClick={() => router.push("/")} className="w-full h-12">
             Go Home
           </Button>
         </div>
@@ -285,21 +346,38 @@ export function LessonFlowScreen() {
 
   const getExerciseTypeLabel = (type: string) => {
     switch (type) {
-      case "turkish-to-english":
-      case "turkish-to-native":
+      case "translate-to-native":
         return `Translate to ${nativeLanguage}`
-      case "english-to-turkish":
-      case "native-to-turkish":
+      case "translate-to-turkish":
         return "Translate to Turkish"
-      case "fill-in-blank":
-        return "Fill in the blank"
+      case "word-bank":
+        return "Build the translation"
+      case "sentence-arrange":
+        return "Arrange the sentence"
       case "multiple-choice":
         return "Choose the correct answer"
-      case "sentence-building":
-        return "Build the sentence"
+      case "fill-blank":
+        return "Fill in the blank"
       default:
         return "Translate"
     }
+  }
+
+  const renderClickableWords = (text: string) => {
+    const words = text.split(" ")
+    return (
+      <div className="flex flex-wrap gap-2 justify-center">
+        {words.map((word, i) => (
+          <button
+            key={i}
+            onClick={() => handleWordClick(word)}
+            className="text-xl font-semibold text-foreground hover:text-primary transition-colors underline decoration-dotted decoration-primary/40 hover:decoration-primary cursor-pointer"
+          >
+            {word}
+          </button>
+        ))}
+      </div>
+    )
   }
 
   return (
@@ -319,12 +397,16 @@ export function LessonFlowScreen() {
 
       {/* Exercise Content */}
       <div className="flex-1 px-6 py-6 flex flex-col">
-        {/* Question Type */}
         <p className="text-sm text-muted-foreground mb-2">{getExerciseTypeLabel(currentExercise.type)}</p>
 
         {/* Question */}
         <Card className="p-6 mb-6 bg-muted/50 border-0">
-          <p className="text-xl font-semibold text-foreground text-center">{currentExercise.question}</p>
+          {(currentExercise.type === "translate-to-native" || currentExercise.type === "sentence-arrange") &&
+          currentExercise.wordDetails ? (
+            renderClickableWords(currentExercise.question)
+          ) : (
+            <p className="text-xl font-semibold text-foreground text-center">{currentExercise.question}</p>
+          )}
           {currentExercise.context && (
             <p className="text-sm text-muted-foreground text-center mt-2 italic">{currentExercise.context}</p>
           )}
@@ -332,7 +414,60 @@ export function LessonFlowScreen() {
 
         {/* Answer Input */}
         <div className="space-y-4 flex-1">
-          {currentExercise.type === "multiple-choice" && currentExercise.options ? (
+          {(currentExercise.type === "word-bank" || currentExercise.type === "sentence-arrange") &&
+          currentExercise.wordBank ? (
+            <div className="space-y-4">
+              {/* Selected words area */}
+              <Card className="p-4 min-h-[80px] bg-primary/5 border-2 border-dashed border-primary/30">
+                {selectedWords.length > 0 ? (
+                  <div className="flex flex-wrap gap-2">
+                    {selectedWords.map((word, i) => (
+                      <button
+                        key={i}
+                        onClick={() => handleRemoveWord(i)}
+                        disabled={!!feedback}
+                        className={cn(
+                          "px-4 py-2 rounded-lg font-medium transition-all",
+                          feedback
+                            ? feedback.isCorrect
+                              ? "bg-green-500 text-white"
+                              : "bg-red-500 text-white"
+                            : "bg-primary text-primary-foreground hover:bg-primary/80",
+                        )}
+                      >
+                        {word}
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-center text-muted-foreground">Tap words below to build your answer</p>
+                )}
+              </Card>
+
+              {/* Word bank */}
+              <div className="flex flex-wrap gap-2 justify-center">
+                {currentExercise.wordBank.map((word, i) => {
+                  const isSelected = selectedWords.includes(word)
+                  return (
+                    <button
+                      key={i}
+                      onClick={() => handleWordSelect(word)}
+                      disabled={!!feedback || isSelected}
+                      className={cn(
+                        "px-4 py-3 rounded-xl font-medium transition-all border-2",
+                        isSelected
+                          ? "opacity-30 border-transparent bg-muted"
+                          : "border-muted hover:border-primary hover:bg-primary/5 bg-background",
+                        feedback && "pointer-events-none",
+                      )}
+                    >
+                      {word}
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+          ) : currentExercise.type === "multiple-choice" && currentExercise.options ? (
             <div className="grid grid-cols-1 gap-3">
               {currentExercise.options.map((option, i) => (
                 <button
@@ -373,14 +508,12 @@ export function LessonFlowScreen() {
             />
           )}
 
-          {/* Hint */}
           {currentExercise.hint && !feedback && (
             <p className="text-sm text-muted-foreground bg-muted/50 p-3 rounded-lg">
               <span className="font-medium">Hint:</span> {currentExercise.hint}
             </p>
           )}
 
-          {/* Feedback */}
           {feedback && (
             <Card
               className={cn(
@@ -409,7 +542,13 @@ export function LessonFlowScreen() {
             <Button
               onClick={checkAnswer}
               className="w-full h-14 text-base font-medium rounded-xl"
-              disabled={currentExercise.type === "multiple-choice" ? !selectedOption : !userAnswer.trim()}
+              disabled={
+                currentExercise.type === "multiple-choice"
+                  ? !selectedOption
+                  : currentExercise.type === "word-bank" || currentExercise.type === "sentence-arrange"
+                    ? selectedWords.length === 0
+                    : !userAnswer.trim()
+              }
             >
               Check Answer
             </Button>
@@ -421,6 +560,36 @@ export function LessonFlowScreen() {
           )}
         </div>
       </div>
+
+      <Dialog open={wordDetailDialog?.open || false} onOpenChange={(open) => !open && setWordDetailDialog(null)}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="text-2xl font-bold">{wordDetailDialog?.word}</DialogTitle>
+            {wordDetailDialog?.pronunciation && (
+              <p className="text-sm text-muted-foreground italic">{wordDetailDialog.pronunciation}</p>
+            )}
+          </DialogHeader>
+          <div className="space-y-4">
+            <div>
+              <p className="text-sm text-muted-foreground mb-1">{nativeLanguage} Translation</p>
+              <p className="text-lg font-medium">{wordDetailDialog?.translation}</p>
+            </div>
+            <Button
+              onClick={async () => {
+                if (!wordDetailDialog) return
+
+                await addVocabulary(wordDetailDialog.word, wordDetailDialog.translation)
+                setWordDetailDialog(null)
+              }}
+              className="w-full"
+              variant="outline"
+            >
+              <Plus className="w-4 h-4 mr-2" />
+              Add to Vocabulary
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

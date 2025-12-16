@@ -5,7 +5,19 @@ import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Progress } from "@/components/ui/progress"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { LogOut, Flame, Trophy, Target, BookOpen, Award, ChevronRight, History, Globe, Check } from "lucide-react"
+import {
+  LogOut,
+  Flame,
+  Trophy,
+  Target,
+  BookOpen,
+  Award,
+  ChevronRight,
+  History,
+  Globe,
+  Check,
+  GraduationCap,
+} from "lucide-react"
 import Link from "next/link"
 import { useState, useEffect } from "react"
 
@@ -24,12 +36,24 @@ const SUPPORTED_LANGUAGES = [
   { code: "Korean", name: "한국어", flag: "🇰🇷" },
 ]
 
+const CEFR_LEVELS = [
+  { code: "A1", name: "A1 - Beginner", description: "Can understand and use basic phrases" },
+  { code: "A2", name: "A2 - Elementary", description: "Can handle simple, routine tasks" },
+  { code: "B1", name: "B1 - Intermediate", description: "Can deal with most travel situations" },
+  { code: "B2", name: "B2 - Upper Intermediate", description: "Can interact with native speakers" },
+  { code: "C1", name: "C1 - Advanced", description: "Can use language flexibly" },
+  { code: "C2", name: "C2 - Mastery", description: "Can understand virtually everything" },
+]
+
 export function ProfileScreen() {
   const { vocabulary, progress, user, signOut } = useApp()
 
   const [nativeLanguage, setNativeLanguage] = useState("English")
+  const [cefrLevel, setCefrLevel] = useState("A1")
   const [savingLanguage, setSavingLanguage] = useState(false)
   const [languageSaved, setLanguageSaved] = useState(false)
+  const [savingLevel, setSavingLevel] = useState(false)
+  const [levelSaved, setLevelSaved] = useState(false)
 
   useEffect(() => {
     fetch("/api/user/settings")
@@ -37,6 +61,9 @@ export function ProfileScreen() {
       .then((data) => {
         if (data.native_language) {
           setNativeLanguage(data.native_language)
+        }
+        if (data.cefr_level) {
+          setCefrLevel(data.cefr_level)
         }
       })
       .catch(console.error)
@@ -62,6 +89,29 @@ export function ProfileScreen() {
       console.error("Failed to save language:", error)
     } finally {
       setSavingLanguage(false)
+    }
+  }
+
+  const handleCefrLevelChange = async (level: string) => {
+    setCefrLevel(level)
+    setSavingLevel(true)
+    setLevelSaved(false)
+
+    try {
+      const res = await fetch("/api/user/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cefr_level: level }),
+      })
+
+      if (res.ok) {
+        setLevelSaved(true)
+        setTimeout(() => setLevelSaved(false), 2000)
+      }
+    } catch (error) {
+      console.error("Failed to save CEFR level:", error)
+    } finally {
+      setSavingLevel(false)
     }
   }
 
@@ -112,6 +162,44 @@ export function ProfileScreen() {
         </Button>
       </div>
 
+      {/* CEFR Level Settings */}
+      <Card className="p-4">
+        <div className="flex items-center gap-3 mb-3">
+          <div className="w-10 h-10 rounded-lg bg-purple-100 dark:bg-purple-950/30 flex items-center justify-center">
+            <GraduationCap className="w-5 h-5 text-purple-600 dark:text-purple-400" />
+          </div>
+          <div className="flex-1">
+            <p className="font-medium text-foreground">Turkish Proficiency Level</p>
+            <p className="text-sm text-muted-foreground">Lessons adapt to your current level</p>
+          </div>
+          {levelSaved && (
+            <div className="flex items-center gap-1 text-green-600 text-sm">
+              <Check className="w-4 h-4" />
+              Saved
+            </div>
+          )}
+        </div>
+        <Select value={cefrLevel} onValueChange={handleCefrLevelChange} disabled={savingLevel}>
+          <SelectTrigger className="w-full">
+            <SelectValue placeholder="Select your level" />
+          </SelectTrigger>
+          <SelectContent>
+            {CEFR_LEVELS.map((level) => (
+              <SelectItem key={level.code} value={level.code}>
+                <div className="flex flex-col items-start">
+                  <span className="font-medium">{level.name}</span>
+                  <span className="text-xs text-muted-foreground">{level.description}</span>
+                </div>
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <p className="text-xs text-muted-foreground mt-2">
+          CEFR (Common European Framework) helps us adjust lesson difficulty
+        </p>
+      </Card>
+
+      {/* Language Settings */}
       <Card className="p-4">
         <div className="flex items-center gap-3 mb-3">
           <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center">
