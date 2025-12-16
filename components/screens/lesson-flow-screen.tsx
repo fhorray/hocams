@@ -1,13 +1,13 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useMemo } from "react"
 import { useRouter } from "next/navigation"
 import { useApp, type LessonResult } from "@/components/providers/app-provider"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Card } from "@/components/ui/card"
 import { Progress } from "@/components/ui/progress"
-import { X, Check, ArrowRight, Sparkles, AlertCircle, Plus } from "lucide-react"
+import { X, Check, ArrowRight, Sparkles, AlertCircle, Plus, Loader2 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 
@@ -62,7 +62,18 @@ export function LessonFlowScreen() {
     word: string
     translation: string
     pronunciation?: string
+    isLoading?: boolean
   } | null>(null)
+
+  const shuffledWordBank = useMemo(() => {
+    if (!exercises[currentIndex]?.wordBank) return []
+    const words = [...exercises[currentIndex].wordBank!]
+    for (let i = words.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1))
+      ;[words[i], words[j]] = [words[j], words[i]]
+    }
+    return words
+  }, [exercises, currentIndex])
 
   useEffect(() => {
     generateExercises()
@@ -115,16 +126,69 @@ export function LessonFlowScreen() {
   const currentExercise = exercises[currentIndex]
   const progress = exercises.length > 0 ? (currentIndex / exercises.length) * 100 : 0
 
-  const handleWordClick = (word: string) => {
-    if (!currentExercise?.wordDetails) return
+  const handleWordClick = async (word: string, isTurkish = true) => {
+    if (!isTurkish) return
 
-    const detail = currentExercise.wordDetails.find((w) => w.word === word)
+    const cleanWord = word.replace(/[.,!?;:'"()]/g, "").trim()
+    if (!cleanWord) return
+
+    const detail = currentExercise?.wordDetails?.find((w) => w.word.toLowerCase() === cleanWord.toLowerCase())
+
     if (detail) {
       setWordDetailDialog({
         open: true,
         word: detail.word,
         translation: detail.translation,
         pronunciation: detail.pronunciation,
+      })
+      return
+    }
+
+    const vocabItem = vocabulary.find((v) => v.turkish.toLowerCase() === cleanWord.toLowerCase())
+
+    if (vocabItem) {
+      setWordDetailDialog({
+        open: true,
+        word: vocabItem.turkish,
+        translation: vocabItem.english,
+      })
+      return
+    }
+
+    setWordDetailDialog({
+      open: true,
+      word: cleanWord,
+      translation: "",
+      isLoading: true,
+    })
+
+    try {
+      const response = await fetch("/api/translate-word", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ word: cleanWord, targetLanguage: nativeLanguage }),
+      })
+
+      if (response.ok) {
+        const data = await response.json()
+        setWordDetailDialog({
+          open: true,
+          word: cleanWord,
+          translation: data.translation,
+          pronunciation: data.pronunciation,
+        })
+      } else {
+        setWordDetailDialog({
+          open: true,
+          word: cleanWord,
+          translation: "Translation unavailable",
+        })
+      }
+    } catch {
+      setWordDetailDialog({
+        open: true,
+        word: cleanWord,
+        translation: "Translation unavailable",
       })
     }
   }
@@ -363,15 +427,20 @@ export function LessonFlowScreen() {
     }
   }
 
-  const renderClickableWords = (text: string) => {
+  const renderClickableWords = (text: string, isTurkish = true) => {
     const words = text.split(" ")
     return (
       <div className="flex flex-wrap gap-2 justify-center">
         {words.map((word, i) => (
           <button
             key={i}
-            onClick={() => handleWordClick(word)}
-            className="text-xl font-semibold text-foreground hover:text-primary transition-colors underline decoration-dotted decoration-primary/40 hover:decoration-primary cursor-pointer"
+            onClick={() => handleWordClick(word, isTurkish)}
+            className={cn(
+              "text-xl font-semibold transition-colors",
+              isTurkish
+                ? "text-foreground hover:text-primary underline decoration-dotted decoration-primary/40 hover:decoration-primary cursor-pointer"
+                : "text-foreground cursor-default",
+            )}
           >
             {word}
           </button>
@@ -382,7 +451,6 @@ export function LessonFlowScreen() {
 
   return (
     <div className="min-h-screen flex flex-col">
-      {/* Header */}
       <div className="px-6 py-4 space-y-3">
         <div className="flex items-center justify-between">
           <Button variant="ghost" size="icon" onClick={handleClose}>
@@ -395,15 +463,17 @@ export function LessonFlowScreen() {
         <Progress value={progress} className="h-2" />
       </div>
 
-      {/* Exercise Content */}
       <div className="flex-1 px-6 py-6 flex flex-col">
         <p className="text-sm text-muted-foreground mb-2">{getExerciseTypeLabel(currentExercise.type)}</p>
 
-        {/* Question */}
         <Card className="p-6 mb-6 bg-muted/50 border-0">
-          {(currentExercise.type === "translate-to-native" || currentExercise.type === "sentence-arrange") &&
-          currentExercise.wordDetails ? (
-            renderClickableWords(currentExercise.question)
+          {currentExercise.type === "translate-to-native" ||
+          currentExercise.type === "word-bank" ||
+          currentExercise.type === "fill-blank" ||
+          currentExercise.type === "multiple-choice" ? (
+            renderClickableWords(currentExercise.question, true)
+          ) : currentExercise.type === "sentence-arrange" || currentExercise.type === "translate-to-turkish" ? (
+            renderClickableWords(currentExercise.question, false)
           ) : (
             <p className="text-xl font-semibold text-foreground text-center">{currentExercise.question}</p>
           )}
@@ -412,12 +482,10 @@ export function LessonFlowScreen() {
           )}
         </Card>
 
-        {/* Answer Input */}
         <div className="space-y-4 flex-1">
           {(currentExercise.type === "word-bank" || currentExercise.type === "sentence-arrange") &&
           currentExercise.wordBank ? (
             <div className="space-y-4">
-              {/* Selected words area */}
               <Card className="p-4 min-h-[80px] bg-primary/5 border-2 border-dashed border-primary/30">
                 {selectedWords.length > 0 ? (
                   <div className="flex flex-wrap gap-2">
@@ -444,17 +512,21 @@ export function LessonFlowScreen() {
                 )}
               </Card>
 
-              {/* Word bank */}
               <div className="flex flex-wrap gap-2 justify-center">
-                {currentExercise.wordBank.map((word, i) => {
+                {shuffledWordBank.map((word, i) => {
                   const isSelected = selectedWords.includes(word)
+                  const isTurkishWord = currentExercise.type === "sentence-arrange"
                   return (
                     <button
-                      key={i}
+                      key={`${word}-${i}`}
                       onClick={() => handleWordSelect(word)}
+                      onContextMenu={(e) => {
+                        e.preventDefault()
+                        if (isTurkishWord) handleWordClick(word, true)
+                      }}
                       disabled={!!feedback || isSelected}
                       className={cn(
-                        "px-4 py-3 rounded-xl font-medium transition-all border-2",
+                        "px-4 py-3 rounded-xl font-medium transition-all border-2 relative group",
                         isSelected
                           ? "opacity-30 border-transparent bg-muted"
                           : "border-muted hover:border-primary hover:bg-primary/5 bg-background",
@@ -462,10 +534,27 @@ export function LessonFlowScreen() {
                       )}
                     >
                       {word}
+                      {isTurkishWord && !isSelected && !feedback && (
+                        <span
+                          className="absolute -top-1 -right-1 w-4 h-4 bg-primary/20 rounded-full text-[10px] flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            handleWordClick(word, true)
+                          }}
+                        >
+                          ?
+                        </span>
+                      )}
                     </button>
                   )
                 })}
               </div>
+
+              {currentExercise.type === "sentence-arrange" && (
+                <p className="text-xs text-muted-foreground text-center">
+                  Tap a word to select it. Long press or hover and click ? to see translation.
+                </p>
+              )}
             </div>
           ) : currentExercise.type === "multiple-choice" && currentExercise.options ? (
             <div className="grid grid-cols-1 gap-3">
@@ -536,7 +625,6 @@ export function LessonFlowScreen() {
           )}
         </div>
 
-        {/* Action Button */}
         <div className="pt-6">
           {!feedback ? (
             <Button
@@ -570,23 +658,31 @@ export function LessonFlowScreen() {
             )}
           </DialogHeader>
           <div className="space-y-4">
-            <div>
-              <p className="text-sm text-muted-foreground mb-1">{nativeLanguage} Translation</p>
-              <p className="text-lg font-medium">{wordDetailDialog?.translation}</p>
-            </div>
-            <Button
-              onClick={async () => {
-                if (!wordDetailDialog) return
-
-                await addVocabulary(wordDetailDialog.word, wordDetailDialog.translation)
-                setWordDetailDialog(null)
-              }}
-              className="w-full"
-              variant="outline"
-            >
-              <Plus className="w-4 h-4 mr-2" />
-              Add to Vocabulary
-            </Button>
+            {wordDetailDialog?.isLoading ? (
+              <div className="flex items-center justify-center py-4">
+                <Loader2 className="w-6 h-6 animate-spin text-primary" />
+                <span className="ml-2 text-muted-foreground">Translating...</span>
+              </div>
+            ) : (
+              <>
+                <div>
+                  <p className="text-sm text-muted-foreground mb-1">{nativeLanguage} Translation</p>
+                  <p className="text-lg font-medium">{wordDetailDialog?.translation}</p>
+                </div>
+                <Button
+                  onClick={async () => {
+                    if (!wordDetailDialog) return
+                    await addVocabulary(wordDetailDialog.word, wordDetailDialog.translation)
+                    setWordDetailDialog(null)
+                  }}
+                  className="w-full"
+                  variant="outline"
+                >
+                  <Plus className="w-4 h-4 mr-2" />
+                  Add to Vocabulary
+                </Button>
+              </>
+            )}
           </div>
         </DialogContent>
       </Dialog>
